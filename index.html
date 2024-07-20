@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notes Application</title>
+    <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f0f0f0;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --accent: #00CED1;
+            --border: #dddddd;
+        }
+        .dark-theme {
+            --bg-primary: #333333;
+            --bg-secondary: #222222;
+            --text-primary: #ffffff;
+            --text-secondary: #cccccc;
+            --accent: #00CED1;
+            --border: #555555;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            height: 100%;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s, color 0.3s;
+        }
+        #app {
+            display: flex;
+            height: 100%;
+        }
+        #sidebar {
+            width: 250px;
+            background-color: var(--bg-secondary);
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+        #main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        #header {
+            background-color: var(--accent);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #notes-container {
+            padding: 20px;
+            overflow-y: auto;
+            flex-grow: 1;
+        }
+        .note {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+        }
+        .note-title, .note-content {
+            width: 100%;
+            background-color: transparent;
+            color: var(--text-primary);
+            border: none;
+            resize: vertical;
+        }
+        .note-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .note-content {
+            min-height: 100px;
+        }
+        #add-note-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background-color: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+        }
+        #add-project-btn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 20px;
+            background-color: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            cursor: pointer;
+        }
+        .project-item {
+            margin-bottom: 10px;
+        }
+        .project-title {
+            font-weight: bold;
+            cursor: pointer;
+            padding: 5px 0;
+        }
+        .project-notes {
+            margin-left: 15px;
+        }
+        .project-note {
+            padding: 3px 0;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+        .project-note:hover {
+            color: var(--accent);
+        }
+        #theme-toggle, #author-input {
+            background: none;
+            border: none;
+            color: var(--bg-primary);
+        }
+        #author-input {
+            border-bottom: 1px solid var(--bg-primary);
+            padding: 5px;
+        }
+        #toast-container {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 1000;
+        }
+        .toast {
+            background-color: var(--accent);
+            color: var(--bg-primary);
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .toast input {
+            width: 100%;
+            padding: 5px;
+            margin-top: 5px;
+            border: none;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="sidebar">
+            <div id="projects-list"></div>
+            <button id="add-project-btn">Add Project Title</button>
+        </div>
+        <div id="main-content">
+            <div id="header">
+                <span id="word-count">0 words</span>
+                <input type="text" id="author-input" placeholder="Author name">
+                <button id="theme-toggle">🌓</button>
+            </div>
+            <div id="notes-container"></div>
+        </div>
+    </div>
+    <button id="add-note-btn">+</button>
+    <div id="toast-container"></div>
+
+    <script>
+        let db;
+        let notes = [];
+        let projects = [];
+        let currentProject = null;
+
+        const sidebar = document.getElementById('sidebar');
+        const addNoteBtn = document.getElementById('add-note-btn');
+        const notesContainer = document.getElementById('notes-container');
+        const wordCountElement = document.getElementById('word-count');
+        const authorInput = document.getElementById('author-input');
+        const projectsList = document.getElementById('projects-list');
+        const addProjectBtn = document.getElementById('add-project-btn');
+        const themeToggle = document.getElementById('theme-toggle');
+        const toastContainer = document.getElementById('toast-container');
+
+        // Initialize IndexedDB
+        const dbName = 'NotesAppDB';
+        const dbVersion = 1;
+        const request = indexedDB.open(dbName, dbVersion);
+
+        request.onerror = (event) => showToast("Database error: " + event.target.error);
+
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            loadDataFromDB();
+        };
+
+        request.onupgradeneeded = (event) => {
+            db = event.target.result;
+            if (!db.objectStoreNames.contains('notes')) {
+                db.createObjectStore('notes', { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains('projects')) {
+                db.createObjectStore('projects', { keyPath: 'id' });
+            }
+        };
+
+        function loadDataFromDB() {
+            const notesStore = db.transaction('notes', 'readonly').objectStore('notes');
+            notesStore.getAll().onsuccess = (event) => {
+                notes = event.target.result;
+                renderNotes();
+            };
+
+            const projectsStore = db.transaction('projects', 'readonly').objectStore('projects');
+            projectsStore.getAll().onsuccess = (event) => {
+                projects = event.target.result;
+                renderProjects();
+            };
+        }
+
+        function saveToIndexedDB(storeName, data) {
+            const transaction = db.transaction(storeName, 'readwrite');
+            const store = transaction.objectStore(storeName);
+            store.put(data);
+        }
+
+        addNoteBtn.addEventListener('click', addNote);
+        addProjectBtn.addEventListener('click', () => showInputToast("Enter project name:", addProject));
+        themeToggle.addEventListener('click', toggleTheme);
+
+        function addNote() {
+            const note = {
+                id: Date.now(),
+                title: 'New Note',
+                content: 'Start typing here...',
+                author: authorInput.value || 'Anonymous',
+                projectId: currentProject,
+                date: new Date().toLocaleString()
+            };
+            notes.push(note);
+            saveToIndexedDB('notes', note);
+            renderNotes();
+            renderProjects();
+            showToast("New note added");
+        }
+
+        function renderNotes() {
+            notesContainer.innerHTML = '';
+            const filteredNotes = currentProject ? notes.filter(note => note.projectId === currentProject) : notes;
+            filteredNotes.forEach(note => {
+                const noteElement = document.createElement('div');
+                noteElement.className = 'note';
+                noteElement.innerHTML = `
+                    <input type="text" class="note-title" value="${note.title}">
+                    <textarea class="note-content">${note.content}</textarea>
+                    <div>Author: ${note.author}</div>
+                    <div>Date: ${note.date}</div>
+                `;
+                noteElement.querySelector('.note-title').addEventListener('input', (e) => updateNote(note.id, 'title', e.target.value));
+                noteElement.querySelector('.note-content').addEventListener('input', (e) => updateNote(note.id, 'content', e.target.value));
+                notesContainer.appendChild(noteElement);
+            });
+            updateWordCount();
+        }
+
+        function updateNote(id, field, value) {
+            const note = notes.find(n => n.id === id);
+            if (note) {
+                note[field] = value;
+                note.author = authorInput.value || note.author;
+                note.date = new Date().toLocaleString();
+                saveToIndexedDB('notes', note);
+                updateWordCount();
+                renderProjects();
+            }
+        }
+
+        function updateWordCount() {
+            const wordCount = notes.reduce((count, note) => {
+                return count + note.content.trim().split(/\s+/).filter(word => word.length > 0).length;
+            }, 0);
+            wordCountElement.textContent = `${wordCount} word${wordCount !== 1 ? 's' : ''}`;
+        }
+
+        function addProject(projectName) {
+            if (projectName) {
+                const project = {
+                    id: Date.now(),
+                    name: projectName
+                };
+                projects.push(project);
+                saveToIndexedDB('projects', project);
+                renderProjects();
+                showToast("New project added: " + projectName);
+            }
+        }
+
+        function renderProjects() {
+            projectsList.innerHTML = '';
+            projects.forEach(project => {
+                const projectElement = document.createElement('div');
+                projectElement.className = 'project-item';
+                projectElement.innerHTML = `
+                    <div class="project-title">${project.name}</div>
+                    <div class="project-notes"></div>
+                `;
+                projectElement.querySelector('.project-title').addEventListener('click', () => {
+                    currentProject = project.id;
+                    renderNotes();
+                    showToast("Switched to project: " + project.name);
+                });
+
+                const projectNotes = projectElement.querySelector('.project-notes');
+                notes.filter(note => note.projectId === project.id).forEach(note => {
+                    const noteElement = document.createElement('div');
+                    noteElement.className = 'project-note';
+                    noteElement.textContent = note.title;
+                    noteElement.addEventListener('click', () => {
+                        currentProject = project.id;
+                        renderNotes();
+                        const noteInMain = document.querySelector(`.note-title[value="${note.title}"]`);
+                        if (noteInMain) noteInMain.scrollIntoView({ behavior: 'smooth' });
+                    });
+                    projectNotes.appendChild(noteElement);
+                });
+
+                projectsList.appendChild(projectElement);
+            });
+        }
+
+        function toggleTheme() {
+            document.body.classList.toggle('dark-theme');
+            showToast("Theme toggled");
+        }
+
+        function showToast(message, duration = 3000) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+            setTimeout(() => toast.style.opacity = '1', 10);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, duration);
+        }
+
+        function showInputToast(message, callback) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `
+                ${message}
+                <input type="text" id="toast-input">
+            `;
+            toastContainer.appendChild(toast);
+            setTimeout(() => toast.style.opacity = '1', 10);
+
+            const input = toast.querySelector('#toast-input');
+            input.focus();
+            input.addEventListener('keyup', (e) => {
+                if (e.key === 'Enter') {
+                    const value = input.value.trim();
+                    if (value) {
+                        callback(value);
+                        toast.style.opacity = '0';
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }
+            });
+        }
+
+        // Initial data load happens in loadDataFromDB after the database is opened
+    </script>
+</body>
+</html>
